@@ -1,0 +1,10 @@
+node_modules/
+dist/
+vault/
+.env
+.env.*
+*.log
+.playwright-mcp/
+auth-vault.zip
+.DS_Store
+Thumbs.db
