@@ -1,5 +1,9 @@
 # @mcp/auth-vault
 
+> **🧩 Branch template** — czysta wersja do klonowania i adaptacji.  
+> Brak testów specyficznych dla Q-ekosystemu, brak danych wrażliwych.  
+> Własne serwisy konfigurujesz przez `add_service` — wystarczą selektory CSS.
+
 **MCP server** for secure credential management, browser-based login automation, and TOTP/2FA auto-solving.
 
 ```

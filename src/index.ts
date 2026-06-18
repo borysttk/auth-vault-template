@@ -11,6 +11,7 @@ import { registerServiceTools } from "./tools/services.js";
 import { registerLoginTools } from "./tools/login.js";
 import { registerSecretTools } from "./tools/secrets.js";
 import { closeAllSessions } from "./browser/manager.js";
+import { registerDiagnosticsTools } from "./tools/diagnostics.js";
 
 const VERSION = "0.1.0";
 const TAILSCALE_RANGE = "100.";
@@ -41,6 +42,7 @@ function registerTools(server: McpServer): void {
   registerServiceTools(server);
   registerLoginTools(server);
   registerSecretTools(server);
+  registerDiagnosticsTools(server);
 }
 
 async function main(): Promise<void> {
