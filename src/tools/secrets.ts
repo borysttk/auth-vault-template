@@ -139,4 +139,89 @@ export function registerSecretTools(server: McpServer): void {
       }
     }
   );
+
+  // === update_secret ===
+  server.tool(
+    "update_secret",
+    "Update an existing secret's value, expiry, scopes, or description",
+    {
+      id: z.string().min(1).describe("Secret ID to update"),
+      value: z.string().optional().describe("New secret value"),
+      expiresAt: z.string().optional().describe("New expiry (ISO 8601). Empty string clears expiry."),
+      description: z.string().optional().describe("New description"),
+      scopes: z.array(z.string()).optional().describe("New permission scopes"),
+    },
+    async (input) => {
+      try {
+        const result = await secrets.getSecret(input.id);
+        if (!result) return jsonError("Secret not found: " + input.id);
+        const fields = { ...result.fields };
+        if (input.value !== undefined) fields.value = input.value;
+        if (input.expiresAt !== undefined) fields.expiresAt = input.expiresAt || undefined;
+        if (input.description !== undefined) fields.description = input.description;
+        if (input.scopes !== undefined) fields.scopes = input.scopes;
+        const ok = await secrets.updateSecret(input.id, fields);
+        if (!ok) return jsonError("Update failed for " + input.id);
+        return jsonOk({
+          success: true,
+          id: input.id,
+          label: result.entry.label,
+          kind: result.entry.kind,
+          service: result.entry.service,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return jsonError(msg);
+      }
+    }
+  );
+
+  // === audit_secret_expiry ===
+  server.tool(
+    "audit_secret_expiry",
+    "Scan all secrets for expired or near-expiry tokens. Categories: expired, expires_soon, valid, no_expiry.",
+    {
+      soonDays: z.number().int().positive().max(365).default(30).describe("Threshold in days for expires-soon"),
+    },
+    async (input) => {
+      try {
+        const all = await secrets.listSecrets();
+        const now = new Date();
+        const soonMs = input.soonDays * 86400000;
+        const expired: unknown[] = [], soon: unknown[] = [], valid: unknown[] = [], noExpiry: unknown[] = [];
+        for (const entry of all) {
+          const full = await secrets.getSecret(entry.id);
+          if (!full) continue;
+          const ea = full.fields.expiresAt;
+          const s = {
+            id: entry.id,
+            label: entry.label,
+            kind: entry.kind,
+            service: entry.service,
+            createdAt: entry.createdAt,
+            expiresAt: ea || null,
+          };
+          if (!ea) { noExpiry.push(s); continue; }
+          const ed = new Date(ea);
+          if (isNaN(ed.getTime())) { noExpiry.push({ ...s, note: "invalid date" }); continue; }
+          if (ed <= now) { expired.push({ ...s, expiredSince: ed.toISOString() }); }
+          else if (ed.getTime() - now.getTime() <= soonMs) { soon.push({ ...s, expiresInDays: Math.round((ed.getTime() - now.getTime()) / 86400000) }); }
+          else { valid.push(s); }
+        }
+        return jsonOk({
+          total: all.length,
+          expired,
+          expiresSoon: soon,
+          valid,
+          noExpiry,
+          checked: now.toISOString(),
+          soonThreshold: input.soonDays,
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return jsonError(msg);
+      }
+    }
+  );
 }

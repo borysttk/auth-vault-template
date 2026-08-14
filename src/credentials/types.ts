@@ -13,6 +13,28 @@ export interface ServiceCredentialFields {
   password: string;
   /** Optional extra fields (e.g., "organization", "tenant_id", "totp_secret") */
   extra?: Record<string, string>;
+  /** List of trusted device fingerprints for passwordless 2FA bypass */
+  trusted_devices?: TrustedDevice[];
+}
+
+/**
+ * A trusted device entry for bypassing 2FA on recognized devices.
+ */
+export interface TrustedDevice {
+  /** SHA256 fingerprint of the device */
+  fingerprint: string;
+  /** Operating system identifier */
+  os: string;
+  /** Device hostname */
+  hostname: string;
+  /** Optional SSH public key fragment for device verification */
+  sshPub?: string;
+  /** ISO timestamp when device was first trusted */
+  addedAt: string;
+  /** ISO timestamp of last successful login from this device */
+  lastUsedAt: string;
+  /** User-agent hash for passive verification */
+  userAgentHash?: string;
 }
 
 /**

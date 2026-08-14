@@ -7,10 +7,16 @@ import * as vault from "../credentials/vault.js";
 import * as secrets from "../secrets/manager.js";
 import * as browser from "../browser/manager.js";
 import { getServiceTemplate } from "../services/definitions.js";
-import { generateTOTP, isValidTOTPSecret } from "../credentials/totp.js";
+import { generateTOTP, isValidTOTPSecret, needsRotation, nextTOTPCode } from "../credentials/totp.js";
 import { generateTOTPSecret, buildOTPAuthURL } from "../credentials/qr.js";
 import qrcode from "qrcode";
 import { htmlDashboard } from "./dashboard.js";
+import * as sshVault from "../ssh/vault.js";
+import { generateSSHKeyPair, extractPublicKey } from "../ssh/generator.js";
+import { generateDeviceFingerprint, buildTrustedDevice, isDeviceTrusted } from "../authVault/fingerprint.js";
+import { logAction, readAuditLog } from "../audit/log.js";
+import { integrityCheck, healthSummary } from "../audit/health.js";
+import { generatePassword, generatePassphrase, type GeneratedPassword } from "../password/generator.js";
 
 const PORT = parseInt(process.env.WEB_UI_PORT || "5600", 10);
 const TAILSCALE_RANGE = "100.";
@@ -98,6 +104,115 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
     if (method === "GET" && path === "/health") {
       json(res, { status: "ok", service: "mcp-auth-vault-web" });
+      return;
+    }
+
+    if (method === "GET" && path === "/api/health") {
+      try {
+        const summary = await healthSummary();
+        json(res, summary);
+      } catch (err: unknown) {
+        jsonError(res, err instanceof Error ? err.message : String(err), 500);
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/audit") {
+      const limit = parseInt(u.searchParams.get("limit") || "50", 10);
+      const entries = await readAuditLog(limit);
+      json(res, { count: entries.length, entries });
+      return;
+    }
+
+    if (method === "POST" && path === "/api/audit") {
+      try {
+        const body = await parseBody(req).catch(() => ({}));
+        await logAction({
+          timestamp: new Date().toISOString(),
+          action: body.action || "manual_log",
+          credentialId: body.credentialId,
+          service: body.service,
+          fingerprint: body.fingerprint,
+          metadata: body.metadata,
+        });
+        json(res, { success: true });
+      } catch (err: unknown) {
+        jsonError(res, err instanceof Error ? err.message : String(err), 500);
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/password/generate") {
+      try {
+        const length = parseInt(u.searchParams.get("length") || "16", 10);
+        const symbols = u.searchParams.get("symbols") === "true";
+        const excludeSimilar = u.searchParams.get("excludeSimilar") === "true";
+        const lowercase = u.searchParams.get("lowercase") !== "false";
+        const uppercase = u.searchParams.get("uppercase") !== "false";
+        const digits = u.searchParams.get("digits") !== "false";
+        const count = Math.min(parseInt(u.searchParams.get("count") || "1", 10), 20);
+        const method = (u.searchParams.get("method") || "auto") as "openssl" | "node" | "auto";
+
+        const passwords: GeneratedPassword[] = [];
+        for (let i = 0; i < count; i++) {
+          passwords.push(generatePassword({
+            length, symbols, excludeSimilar, lowercase, uppercase, digits, method,
+          }));
+        }
+        json(res, { count: passwords.length, passwords });
+      } catch (err: unknown) {
+        jsonError(res, err instanceof Error ? err.message : String(err), 500);
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/discovery") {
+      try {
+        const creds = await vault.listCredentials();
+        const secs = await secrets.listSecrets();
+        const sshKeys = await sshVault.listSSHKeys();
+        json(res, {
+          vault: {
+            credentials: creds.length,
+            secrets: secs.length,
+            sshKeys: sshKeys.length,
+          },
+          services: creds.map((c) => c.service).filter((v, i, a) => a.indexOf(v) === i),
+        });
+      } catch (err: unknown) {
+        jsonError(res, err instanceof Error ? err.message : String(err), 500);
+      }
+      return;
+    }
+
+    // ── API: SSH key config export ────────────────────────────────────────
+    const sshConfigMatch = path.match(/^\/api\/ssh\/([a-f0-9]+)\/config$/);
+    if (method === "GET" && sshConfigMatch) {
+      const result = await sshVault.getSSHKey(sshConfigMatch[1]);
+      if (!result) { jsonError(res, "SSH key not found", 404); return; }
+      const { entry, fields } = result;
+      const idPath = `~/.ssh/${entry.label.replace(/\s+/g, "_")}`;
+      const config = [
+        `Host ${entry.host}`,
+        `    HostName ${entry.hostname || entry.host}`,
+        `    User ${entry.username}`,
+        `    Port ${entry.port}`,
+        `    IdentityFile ${idPath}`,
+      ].join("\n");
+      json(res, { config, identityFile: idPath, fingerprint: entry.fingerprint });
+      return;
+    }
+
+    // ── API: SSH key file export ──────────────────────────────────────────
+    const sshFileMatch = path.match(/^\/api\/ssh\/([a-f0-9]+)\/file$/);
+    if (method === "GET" && sshFileMatch) {
+      const result = await sshVault.getSSHKey(sshFileMatch[1]);
+      if (!result) { jsonError(res, "SSH key not found", 404); return; }
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${result.entry.label.replace(/\s+/g, "_")}.key"`,
+      });
+      res.end(result.fields.privateKey);
       return;
     }
 
