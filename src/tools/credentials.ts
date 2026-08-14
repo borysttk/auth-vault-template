@@ -213,4 +213,68 @@ export function registerCredentialTools(server: McpServer): void {
       }
     }
   );
+
+  // === generate_totp ===
+  server.tool(
+    "generate_totp",
+    "Generate a 6-digit TOTP code from a stored credential's totp_secret",
+    {
+      credentialId: z.string().min(1).describe("Credential ID with totp_secret"),
+    },
+    async (input) => {
+      try {
+        const result = await vault.getCredentials(input.credentialId);
+        if (!result) return jsonError("Not found: " + input.credentialId);
+        const s = result.fields.extra?.totp_secret;
+        if (!s) return jsonError("No totp_secret in " + input.credentialId);
+        const m = await import("../credentials/totp.js");
+        const code = m.generateTOTP(s);
+        const now = Math.floor(Date.now() / 1000);
+        return jsonOk({
+          success: true,
+          code,
+          service: result.entry.service,
+          label: result.entry.label,
+          username: result.fields.username,
+          windowRemaining: 30 - (now % 30),
+          rotateSoon: m.needsRotation(),
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return jsonError(msg);
+      }
+    }
+  );
+
+  // === generate_totp_by_service ===
+  server.tool(
+    "generate_totp_by_service",
+    "Generate TOTP for a service's first credential with totp_secret",
+    {
+      service: z.string().min(1).describe("Service identifier (e.g. github)"),
+    },
+    async (input) => {
+      try {
+        const results = await vault.getCredentialsForService(input.service);
+        if (!results || !results.length) return jsonError("No creds for " + input.service);
+        const wt = results.find((r) => r.fields.extra?.totp_secret);
+        if (!wt) return jsonError("No totp_secret for service " + input.service);
+        const m = await import("../credentials/totp.js");
+        const code = m.generateTOTP(wt.fields.extra!.totp_secret);
+        const now = Math.floor(Date.now() / 1000);
+        return jsonOk({
+          success: true,
+          code,
+          service: wt.entry.service,
+          label: wt.entry.label,
+          username: wt.fields.username,
+          windowRemaining: 30 - (now % 30),
+          rotateSoon: m.needsRotation(),
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return jsonError(msg);
+      }
+    }
+  );
 }

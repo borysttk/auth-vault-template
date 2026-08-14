@@ -10,10 +10,11 @@ import { registerCredentialTools } from "./tools/credentials.js";
 import { registerServiceTools } from "./tools/services.js";
 import { registerLoginTools } from "./tools/login.js";
 import { registerSecretTools } from "./tools/secrets.js";
+import { registerSSHTools } from "./tools/ssh.js";
+import { registerAuditTools } from "./tools/audit.js";
 import { closeAllSessions } from "./browser/manager.js";
-import { registerDiagnosticsTools } from "./tools/diagnostics.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const TAILSCALE_RANGE = "100.";
 
 function findTailscaleIPv4(): string | null {
@@ -42,7 +43,8 @@ function registerTools(server: McpServer): void {
   registerServiceTools(server);
   registerLoginTools(server);
   registerSecretTools(server);
-  registerDiagnosticsTools(server);
+  registerSSHTools(server);
+  registerAuditTools(server);
 }
 
 async function main(): Promise<void> {

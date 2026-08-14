@@ -50,6 +50,13 @@ const configSchema = z.object({
     .pipe(z.number().int().positive().max(65535).optional()),
   AUTH_BIND_ADDRESS: z.string().optional(),
 
+  // === Audit ===
+  AUDIT_LOG_MAX_BYTES: z
+    .string()
+    .default("10485760")
+    .transform(Number)
+    .pipe(z.number().int().positive()),
+
   // === Logging ===
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
