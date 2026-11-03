@@ -38,7 +38,7 @@ function stripPort(addr: string): string {
   return addr.replace(/::ffff:/, "").replace(/:.*$/, "");
 }
 
-function registerTools(server: McpServer): void {
+export function registerTools(server: McpServer): void {
   registerCredentialTools(server);
   registerServiceTools(server);
   registerLoginTools(server);

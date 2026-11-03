@@ -45,7 +45,29 @@ export interface SecretEntry {
   updatedAt: string;
   /** Tags for organization */
   tags?: string[];
+  /**
+   * Operational status, same vocabulary as credentials:
+   * "active" (default) | "disabled" | "degraded" | "expired" | "testing".
+   * Anything other than "active" means "do not use without asking first".
+   */
+  status?: SecretStatus;
+  /**
+   * Free-form operator note — anything a future session cannot infer from
+   * the secret itself: which account it belongs to, docs URL, "revoked",
+   * "needs re-login", "superseded by ...".
+   */
+  notes?: string;
+  /** When `status` last flipped, so "off since when?" is answerable. */
+  statusChangedAt?: string;
 }
+
+/** Lifecycle state of a secret. Mirrors CredentialStatus. */
+export type SecretStatus =
+  | "active"
+  | "disabled"
+  | "degraded"
+  | "expired"
+  | "testing";
 
 /**
  * Encrypted payload (AES-256-GCM) — same structure as credential vault.

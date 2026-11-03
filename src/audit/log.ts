@@ -67,7 +67,8 @@ export async function logAction(entry: AuditEntry): Promise<void> {
   }
 
   const line = JSON.stringify(entry) + "\n";
-  await fs.appendFile(filePath, line, "utf8");
+  await fs.appendFile(filePath, line, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(filePath, 0o600);
 }
 
 /**

@@ -2,7 +2,7 @@ import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { getConfig } from "../config.js";
-import { CredentialEntry, EncryptedData, ServiceCredentialFields } from "./types.js";
+import { CredentialEntry, CredentialStatus, EncryptedData, ServiceCredentialFields } from "./types.js";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
@@ -58,18 +58,28 @@ async function ensureVaultDir(): Promise<void> {
 
 async function readIndex(): Promise<VaultIndex> {
   const file = path.join(vaultPath(), INDEX_FILE);
+  let data: string;
   try {
-    const data = await fs.readFile(file, "utf8");
-    return JSON.parse(data) as VaultIndex;
-  } catch {
-    return { entries: [] };
+    data = await fs.readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { entries: [] };
+    throw err;
   }
+  return JSON.parse(data) as VaultIndex;
 }
 
 async function writeIndex(index: VaultIndex): Promise<void> {
   await ensureVaultDir();
   const file = path.join(vaultPath(), INDEX_FILE);
-  await fs.writeFile(file, JSON.stringify(index, null, 2), "utf8");
+  const tmp = `${file}.${process.pid}.tmp`;
+  const handle = await fs.open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(index, null, 2), "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(tmp, file);
 }
 
 function generateId(): string {
@@ -131,10 +141,13 @@ export async function listCredentials(
   service?: string
 ): Promise<CredentialEntry[]> {
   const index = await readIndex();
+  // The index also holds secret records, whose payload lives in secrets.json —
+  // listing them offers rows whose detail view cannot decrypt anything.
+  const credentials = index.entries.filter((e) => Boolean(e.data?.iv));
   if (service) {
-    return index.entries.filter((e) => e.service === service);
+    return credentials.filter((e) => e.service === service);
   }
-  return index.entries;
+  return credentials;
 }
 
 export async function deleteCredentials(id: string): Promise<boolean> {
@@ -148,7 +161,10 @@ export async function deleteCredentials(id: string): Promise<boolean> {
 
 export async function updateCredentials(
   id: string,
-  fields: ServiceCredentialFields
+  fields: ServiceCredentialFields,
+  entryUpdates?: Partial<
+    Pick<CredentialEntry, "label" | "tags" | "status" | "notes">
+  >
 ): Promise<boolean> {
   const index = await readIndex();
   const entry = index.entries.find((e) => e.id === id);
@@ -156,6 +172,40 @@ export async function updateCredentials(
 
   const plaintext = JSON.stringify(fields);
   entry.data = encrypt(plaintext);
+  entry.updatedAt = new Date().toISOString();
+
+  await writeIndex(index);
+  return true;
+}
+
+// Metadane (label / service / tags / status / notes) są na obiekcie wpisu, nie
+// w kopercie `data`. Osobna funkcja — scalona z updateCredentials() przywróci
+// ciche gubienie etykiet.
+export async function updateCredentialMeta(
+  id: string,
+  meta: {
+    label?: string;
+    service?: string;
+    tags?: string[];
+    status?: CredentialStatus;
+    notes?: string;
+  }
+): Promise<boolean> {
+  const index = await readIndex();
+  const entry = index.entries.find((e) => e.id === id);
+  if (!entry) return false;
+
+  if (meta.label !== undefined) entry.label = meta.label;
+  if (meta.service !== undefined) entry.service = meta.service;
+  if (meta.tags !== undefined) entry.tags = meta.tags;
+  if (meta.notes !== undefined) entry.notes = meta.notes;
+  if (meta.status !== undefined) {
+    // Zapamiętaj kiedy status się zmienił — "wyłączony od kiedy?" musi mieć odpowiedź.
+    if (entry.status !== meta.status) {
+      entry.statusChangedAt = new Date().toISOString();
+    }
+    entry.status = meta.status;
+  }
   entry.updatedAt = new Date().toISOString();
 
   await writeIndex(index);

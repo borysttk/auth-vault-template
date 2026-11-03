@@ -64,18 +64,28 @@ async function ensureDir(): Promise<void> {
 
 async function readIndex(): Promise<SSHIndex> {
   const filePath = path.join(vaultPath(), INDEX_FILE);
+  let raw: string;
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as SSHIndex;
-  } catch {
-    return { entries: [] };
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { entries: [] };
+    throw err;
   }
+  return JSON.parse(raw) as SSHIndex;
 }
 
 async function writeIndex(index: SSHIndex): Promise<void> {
   await ensureDir();
   const filePath = path.join(vaultPath(), INDEX_FILE);
-  await fs.writeFile(filePath, JSON.stringify(index, null, 2), "utf8");
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  const handle = await fs.open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(index, null, 2), "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(tmp, filePath);
 }
 
 function generateId(): string {
