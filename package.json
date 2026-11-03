@@ -33,10 +33,11 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/node": "^22.20.1",
+    "@types/node": "^22.0.0",
     "@types/qrcode": "^1.5.6",
-    "tsx": "^4.23.12",
-    "typescript": "^5.9.3"
+    "esbuild": "^0.28.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   },
   "keywords": [
     "mcp",

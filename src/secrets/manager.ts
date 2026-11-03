@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfig } from "../config.js";
-import { SecretEntry, SecretFields, SecretKind, EncryptedPayload } from "./types.js";
+import { SecretEntry, SecretFields, SecretKind, SecretStatus, EncryptedPayload } from "./types.js";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
@@ -49,17 +49,28 @@ async function ensureDir(): Promise<void> {
 
 async function readIndex(): Promise<SecretsIndex> {
   const file = path.join(secretsPath(), INDEX_FILE);
+  let data: string;
   try {
-    const data = await fs.readFile(file, "utf8");
-    return JSON.parse(data) as SecretsIndex;
-  } catch {
-    return { entries: [] };
+    data = await fs.readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { entries: [] };
+    throw err;
   }
+  return JSON.parse(data) as SecretsIndex;
 }
 
 async function writeIndex(index: SecretsIndex): Promise<void> {
   await ensureDir();
-  await fs.writeFile(path.join(secretsPath(), INDEX_FILE), JSON.stringify(index, null, 2), "utf8");
+  const file = path.join(secretsPath(), INDEX_FILE);
+  const tmp = `${file}.${process.pid}.tmp`;
+  const handle = await fs.open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(index, null, 2), "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(tmp, file);
 }
 
 function generateId(): string {
@@ -103,7 +114,17 @@ export async function getSecret(
   if (!entry) return null;
 
   const plaintext = decrypt(entry.data);
-  const fields = JSON.parse(plaintext) as SecretFields;
+
+  // PITFALL: nie kazdy wpis jest JSON-em. Stare wpisy (np. z migracji CLI)
+  // trzymaja goly sekret jako plaintext — `JSON.parse("vcp_0pOngm...")` rzuca
+  // "Unexpected token 'v'" i caly endpoint konczy HTTP 500, przez co wpis
+  // wyglada na martwy/niedostepny, a wartosc jest tam i jest poprawna.
+  let fields: SecretFields;
+  try {
+    fields = JSON.parse(plaintext) as SecretFields;
+  } catch {
+    fields = { value: plaintext } as SecretFields;
+  }
   return { entry, fields };
 }
 
@@ -139,6 +160,41 @@ export async function updateSecret(
 
   entry.data = encrypt(JSON.stringify(fields));
   entry.updatedAt = new Date().toISOString();
+  await writeIndex(index);
+  return true;
+}
+
+// Metadane rekordu są poza kopertą `data`, więc updateSecret() ich nie dosięgnie.
+// Osobna funkcja — inaczej handler PUT zgłasza "updated", a nazwa zostaje stara.
+export async function updateSecretMeta(
+  id: string,
+  meta: {
+    label?: string;
+    kind?: SecretKind;
+    service?: string;
+    tags?: string[];
+    status?: SecretStatus;
+    notes?: string;
+  }
+): Promise<boolean> {
+  const index = await readIndex();
+  const entry = index.entries.find((e) => e.id === id);
+  if (!entry) return false;
+
+  if (meta.label !== undefined) entry.label = meta.label;
+  if (meta.kind !== undefined) entry.kind = meta.kind;
+  if (meta.service !== undefined) entry.service = meta.service;
+  if (meta.tags !== undefined) entry.tags = meta.tags;
+  if (meta.notes !== undefined) entry.notes = meta.notes;
+  if (meta.status !== undefined) {
+    // Zapamiętaj kiedy status się zmienił — "wyłączony od kiedy?" musi mieć odpowiedź.
+    if (entry.status !== meta.status) {
+      entry.statusChangedAt = new Date().toISOString();
+    }
+    entry.status = meta.status;
+  }
+  entry.updatedAt = new Date().toISOString();
+
   await writeIndex(index);
   return true;
 }

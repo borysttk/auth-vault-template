@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as vault from "../ssh/vault.js";
 import { generateSSHKeyPair, extractPublicKey } from "../ssh/generator.js";
 import { SSHKeyFields, SSHConfigFragment } from "../ssh/types.js";
+import { logAction } from "../audit/log.js";
 
 function jsonOk(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -151,6 +152,11 @@ export function registerSSHTools(server: McpServer): void {
       try {
         const ok = await vault.deleteSSHKey(input.id);
         if (!ok) return jsonError("SSH key not found");
+        await logAction({
+          timestamp: new Date().toISOString(),
+          action: "delete_key",
+          metadata: { kind: "ssh_key", id: input.id },
+        });
         return jsonOk({ success: true });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

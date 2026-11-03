@@ -55,7 +55,29 @@ export interface CredentialEntry {
   updatedAt: string;
   /** Metadata tags */
   tags?: string[];
+  /**
+   * Operational status: "active" (default) | "disabled" | "degraded" |
+   * "expired" | "testing". Anything other than "active" means "do not use
+   * without asking the operator first".
+   */
+  status?: CredentialStatus;
+  /**
+   * Free-form operator note. Use for anything a future session cannot infer
+   * from the secret itself: "free tier exhausted", "needs billing",
+   * "temporarily disabled", "works only from predator13", etc.
+   */
+  notes?: string;
+  /** When `status` last flipped, so "off since when?" is answerable. */
+  statusChangedAt?: string;
 }
+
+/** Lifecycle state of a credential. */
+export type CredentialStatus =
+  | "active"
+  | "disabled"
+  | "degraded"
+  | "expired"
+  | "testing";
 
 /**
  * Encrypted payload structure (AES-256-GCM).

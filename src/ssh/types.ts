@@ -59,6 +59,12 @@ export interface SSHKeyEntry {
   hostname?: string;
   /** Public key in OpenSSH format (for quick copy/display without decryption) */
   publicKey?: string;
+  /** Decrypted private key (only available after decryption) */
+  privateKey?: string;
+  /** Decrypted passphrase (only available after decryption) */
+  passphrase?: string;
+  /** Decrypted comment (only available after decryption) */
+  comment?: string;
   /** Encrypted payload */
   data: EncryptedPayload;
   /** When created */
@@ -67,6 +73,7 @@ export interface SSHKeyEntry {
   updatedAt: string;
   /** Tags for organization */
   tags?: string[];
+
 }
 
 /**

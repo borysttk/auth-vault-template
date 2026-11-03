@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as secrets from "../secrets/manager.js";
 import { SecretKind } from "../secrets/types.js";
+import { logAction } from "../audit/log.js";
 
 function jsonOk(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -131,8 +132,13 @@ export function registerSecretTools(server: McpServer): void {
     },
     async (input) => {
       try {
-        const deleted = await secrets.deleteSecret(input.id);
-        return jsonOk({ success: deleted, id: input.id });
+const deleted = await secrets.deleteSecret(input.id);
+      await logAction({
+        timestamp: new Date().toISOString(),
+        action: "delete_key",
+        metadata: { kind: "secret", id: input.id, deleted },
+      });
+      return jsonOk({ success: deleted, id: input.id });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return jsonError(msg);
@@ -162,18 +168,8 @@ export function registerSecretTools(server: McpServer): void {
         if (input.scopes !== undefined) fields.scopes = input.scopes;
         const ok = await secrets.updateSecret(input.id, fields);
         if (!ok) return jsonError("Update failed for " + input.id);
-        return jsonOk({
-          success: true,
-          id: input.id,
-          label: result.entry.label,
-          kind: result.entry.kind,
-          service: result.entry.service,
-          updatedAt: new Date().toISOString(),
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return jsonError(msg);
-      }
+        return jsonOk({success:true, id:input.id, label:result.entry.label, kind:result.entry.kind, service:result.entry.service, updatedAt:new Date().toISOString()});
+      } catch(err) { return jsonError(err instanceof Error ? err.message : String(err)); }
     }
   );
 
@@ -189,39 +185,22 @@ export function registerSecretTools(server: McpServer): void {
         const all = await secrets.listSecrets();
         const now = new Date();
         const soonMs = input.soonDays * 86400000;
-        const expired: unknown[] = [], soon: unknown[] = [], valid: unknown[] = [], noExpiry: unknown[] = [];
+        const expired = [], soon = [], valid = [], noExpiry = [];
         for (const entry of all) {
           const full = await secrets.getSecret(entry.id);
           if (!full) continue;
           const ea = full.fields.expiresAt;
-          const s = {
-            id: entry.id,
-            label: entry.label,
-            kind: entry.kind,
-            service: entry.service,
-            createdAt: entry.createdAt,
-            expiresAt: ea || null,
-          };
+          const s = { id:entry.id, label:entry.label, kind:entry.kind, service:entry.service, createdAt:entry.createdAt, expiresAt:ea || null };
           if (!ea) { noExpiry.push(s); continue; }
           const ed = new Date(ea);
-          if (isNaN(ed.getTime())) { noExpiry.push({ ...s, note: "invalid date" }); continue; }
-          if (ed <= now) { expired.push({ ...s, expiredSince: ed.toISOString() }); }
-          else if (ed.getTime() - now.getTime() <= soonMs) { soon.push({ ...s, expiresInDays: Math.round((ed.getTime() - now.getTime()) / 86400000) }); }
+          if (isNaN(ed.getTime())) { noExpiry.push({...s, note:"invalid date"}); continue; }
+          if (ed <= now) { expired.push({...s, expiredSince:ed.toISOString()}); }
+          else if (ed.getTime() - now.getTime() <= soonMs) { soon.push({...s, expiresInDays:Math.round((ed.getTime()-now.getTime())/86400000)}); }
           else { valid.push(s); }
         }
-        return jsonOk({
-          total: all.length,
-          expired,
-          expiresSoon: soon,
-          valid,
-          noExpiry,
-          checked: now.toISOString(),
-          soonThreshold: input.soonDays,
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return jsonError(msg);
-      }
+        return jsonOk({total:all.length, expired, expiresSoon:soon, valid, noExpiry, checked:now.toISOString(), soonThreshold:input.soonDays});
+      } catch(err) { return jsonError(err instanceof Error ? err.message : String(err)); }
     }
   );
+
 }

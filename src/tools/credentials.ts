@@ -1,7 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as vault from "../credentials/vault.js";
+import * as secrets from "../secrets/manager.js";
 import { ServiceCredentialFields } from "../credentials/types.js";
+import { logAction } from "../audit/log.js";
 
 function jsonOk(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -56,7 +58,44 @@ export function registerCredentialTools(server: McpServer): void {
     }
   );
 
-  // === get_credentials ===
+  // === get_credentials_envelope ===
+  // Q-Envelope v2: ZERO-PLAINTEXT delivery.
+  // Node NIE odszyfrowuje credentiala — envelope.py czyta z vault.db/JSON samodzielnie,
+  // szyfruje do odbiorcy (X25519+ChaCha20Poly1305) i zwraca TYLKO ciphertext.
+  // Plaintext istnieje wyłącznie wewnatrz procesu envelope.py (przed encrypt).
+  server.tool(
+    "get_credentials_envelope",
+    "Retrieve credentials ENCRYPTED in Q-Envelope to a recipient node (X25519+ChaCha20Poly1305). The plaintext credential is NEVER decoded in the Node process — the Python backend reads it from the vault and encrypts in-place. Use instead of get_credentials for cross-service secret delivery.",
+    {
+      cred_id: z.string().min(1).describe("Credential ID, service, or label to deliver (resolved by envelope backend)"),
+      recipient: z.string().min(1).describe("Recipient node name from q-env.json (e.g. 'q-predator', VPS uuid)"),
+    },
+    async (input) => {
+      try {
+        const { spawnSync } = await import("node:child_process");
+        const proc = spawnSync(
+          "python3",
+          ["/opt/q-envelope/envelope.py", "deliver", input.cred_id, input.recipient],
+          { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }
+        );
+        if (proc.status !== 0) {
+          return jsonError(`Envelope delivery failed: ${proc.stderr || proc.error}`);
+        }
+        const envelope = JSON.parse(proc.stdout.trim());
+        return jsonOk({
+          id: input.cred_id,
+          recipient: input.recipient,
+          envelope,
+          note: "Decrypt with your private key via Q-Envelope (envelope.py decrypt). Plaintext never left the vault backend process.",
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return jsonError(msg);
+      }
+    }
+  );
+
+
   server.tool(
     "get_credentials",
     "Retrieve stored credentials by ID. Returns decrypted username and password.",
@@ -129,8 +168,14 @@ export function registerCredentialTools(server: McpServer): void {
     },
     async (input) => {
       try {
-        const deleted = await vault.deleteCredentials(input.id);
-        return jsonOk({ success: deleted, id: input.id });
+const deleted = await vault.deleteCredentials(input.id);
+      await logAction({
+        timestamp: new Date().toISOString(),
+        action: "delete_key",
+        credentialId: input.id,
+        metadata: { kind: "credential", deleted },
+      });
+      return jsonOk({ success: deleted, id: input.id });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return jsonError(msg);
@@ -223,26 +268,29 @@ export function registerCredentialTools(server: McpServer): void {
     },
     async (input) => {
       try {
-        const result = await vault.getCredentials(input.credentialId);
-        if (!result) return jsonError("Not found: " + input.credentialId);
+        let result = null;
+        try { result = await vault.getCredentials(input.credentialId); } catch {}
+        if (!result || !result.fields) {
+          // Fallback: secret may live in secrets vault (secrets.json), e.g. TOTP secrets
+          const sec = await secrets.getSecret(input.credentialId);
+          if (!sec) return jsonError("Not found: " + input.credentialId);
+          let s = sec.fields.value ?? sec.fields.extra?.totp_secret;
+          if (typeof s === "string" && s.trim().startsWith("{")) {
+            try { s = JSON.parse(s).value ?? s; } catch {}
+          }
+          if (!s) return jsonError("No totp_secret in " + input.credentialId);
+          const m = await import("../credentials/totp.js");
+          const code = m.generateTOTP(s);
+          const now = Math.floor(Date.now() / 1000);
+          return jsonOk({success:true, code, service:sec.entry.service, label:sec.entry.label, windowRemaining:30 - (now % 30), rotateSoon:m.needsRotation()});
+        }
         const s = result.fields.extra?.totp_secret;
         if (!s) return jsonError("No totp_secret in " + input.credentialId);
         const m = await import("../credentials/totp.js");
         const code = m.generateTOTP(s);
         const now = Math.floor(Date.now() / 1000);
-        return jsonOk({
-          success: true,
-          code,
-          service: result.entry.service,
-          label: result.entry.label,
-          username: result.fields.username,
-          windowRemaining: 30 - (now % 30),
-          rotateSoon: m.needsRotation(),
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return jsonError(msg);
-      }
+        return jsonOk({success:true, code, service:result.entry.service, label:result.entry.label, username:result.fields.username, windowRemaining:30 - (now % 30), rotateSoon:m.needsRotation()});
+      } catch(err) { return jsonError(err instanceof Error ? err.message : String(err)); }
     }
   );
 
@@ -257,24 +305,14 @@ export function registerCredentialTools(server: McpServer): void {
       try {
         const results = await vault.getCredentialsForService(input.service);
         if (!results || !results.length) return jsonError("No creds for " + input.service);
-        const wt = results.find((r) => r.fields.extra?.totp_secret);
+        const wt = results.find(r => r.fields.extra?.totp_secret);
         if (!wt) return jsonError("No totp_secret for service " + input.service);
         const m = await import("../credentials/totp.js");
         const code = m.generateTOTP(wt.fields.extra!.totp_secret);
         const now = Math.floor(Date.now() / 1000);
-        return jsonOk({
-          success: true,
-          code,
-          service: wt.entry.service,
-          label: wt.entry.label,
-          username: wt.fields.username,
-          windowRemaining: 30 - (now % 30),
-          rotateSoon: m.needsRotation(),
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return jsonError(msg);
-      }
+        return jsonOk({success:true, code, credentialId:wt.entry.id, service:input.service, username:wt.fields.username, windowRemaining:30 - (now % 30), rotateSoon:m.needsRotation()});
+      } catch(err) { return jsonError(err instanceof Error ? err.message : String(err)); }
     }
   );
+
 }
