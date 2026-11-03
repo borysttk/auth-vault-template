@@ -14,7 +14,6 @@ import * as sshVault from "../ssh/vault.js";
 import { generateSSHKeyPair, extractPublicKey } from "../ssh/generator.js";
 import { generateDeviceFingerprint, buildTrustedDevice, isDeviceTrusted } from "../authVault/fingerprint.js";
 import { htmlDashboard } from "./dashboard.js";
-import { htmlDashboardCache } from "./dashboard-cache.js";
 import { logAction, readAuditLog } from "../audit/log.js";
 import { integrityCheck, healthSummary } from "../audit/health.js";
 import { generatePassword, generatePassphrase, type GeneratedPassword } from "../password/generator.js";
@@ -103,12 +102,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     if (method === "GET" && path === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(htmlDashboard());
-      return;
-    }
-
-    if (method === "GET" && path === "/cache") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(htmlDashboardCache());
       return;
     }
 
